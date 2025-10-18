@@ -144,10 +144,21 @@ def process_bookmarks():
             else:
                 logging.info("Finished processing. No new videos found.")
 
-        # Wait for the next 15-minute interval + random jitter
-        wait_time = (15 * 60) + random.uniform(60, 120)
-        logging.info(f"Next check in {wait_time / 60:.2f} minutes.")
-        time.sleep(wait_time)
+        # Wait for the next 15-minute interval + random jitter, with heartbeat logging
+        total_wait_seconds = (15 * 60) + random.uniform(60, 120)
+        wait_until = time.time() + total_wait_seconds
+        logging.info(f"Cooldown period started. Next check in {total_wait_seconds / 60:.2f} minutes.")
+
+        while time.time() < wait_until:
+            remaining_seconds = wait_until - time.time()
+            # Sleep for 1 minute or the remaining time, whichever is smaller
+            sleep_duration = min(60, remaining_seconds)
+            if sleep_duration > 0:
+                time.sleep(sleep_duration)
+
+            # Log a heartbeat message if there's still significant time left
+            if (wait_until - time.time()) > 5:
+                logging.info(f"Heartbeat: Application is alive. Next check in {(wait_until - time.time()) / 60:.1f} minutes.")
 
 
 # --- Main Execution ---

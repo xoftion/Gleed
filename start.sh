@@ -3,7 +3,7 @@ set -e # Exit immediately if a command exits with a non-zero status.
 
 echo "--- Running start script ---"
 
-# Validate essential environment variables
+# Validate essential environment variables at runtime
 echo "Validating environment variables..."
 : "${API_KEY:?API_KEY not set. Please set this environment variable.}"
 : "${API_SECRET:?API_SECRET not set. Please set this environment variable.}"

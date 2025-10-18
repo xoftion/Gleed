@@ -6,4 +6,5 @@ echo "--- Running build script ---"
 # Create directories
 echo "Creating data directories..."
 mkdir -p bookmark_videos
+
 echo "--- Build script finished successfully ---"
