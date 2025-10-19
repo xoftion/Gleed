@@ -108,33 +108,42 @@ def process_bookmarks():
                     break
 
                 if not response.data:
-                    logging.info("No more bookmarks found in this cycle.")
+                    logging.info("DIAGNOSTIC: API returned no bookmark data on this page.")
                     break
 
+                logging.info(f"DIAGNOSTIC: Received {len(response.data)} bookmarks on this page.")
+
                 media_map = {m["media_key"]: m for m in response.includes.get("media", [])}
+                logging.info(f"DIAGNOSTIC: Found {len(media_map)} media items in 'includes' block.")
 
                 for tweet in response.data:
                     if str(tweet.id) in processed_tweet_ids:
                         continue
 
                     if tweet.attachments and "media_keys" in tweet.attachments:
-                        for media_key in tweet.attachments["media_keys"]:
+                        logging.info(f"DIAGNOSTIC: Tweet {tweet.id} has {len(tweet.attachments['media_keys'])} media keys.")
+                        for i, media_key in enumerate(tweet.attachments["media_keys"]):
                             media = media_map.get(media_key)
-                            if media and media.type == "video":
-                                tweet_url = f"https://twitter.com/i/status/{tweet.id}"
-                                logging.info(f"Video found in tweet: {tweet_url}")
-                                if download_video(tweet_url, temp_download_dir):
-                                    # Track successfully downloaded files
-                                    # Note: This is a simple approach; a more robust one would get the exact filename from yt-dlp.
-                                    pass
-                                break
+                            if media:
+                                logging.info(f"DIAGNOSTIC: Media key {i+1}/{len(tweet.attachments['media_keys'])} ({media_key}) has type: {media.type}")
+                                if media.type == "video":
+                                    tweet_url = f"https://twitter.com/i/status/{tweet.id}"
+                                    logging.info(f"Video found in tweet: {tweet_url}")
+                                    download_video(tweet_url, temp_download_dir)
+                                    break # Found a video, no need to check other media in this tweet
+                            else:
+                                logging.warning(f"DIAGNOSTIC: Media key {media_key} not found in 'includes' block.")
+                    else:
+                        logging.info(f"DIAGNOSTIC: Tweet {tweet.id} has no media attachments.")
 
                     processed_tweet_ids.add(str(tweet.id))
 
                 meta = response.meta
                 if "next_token" in meta:
                     pagination_token = meta["next_token"]
+                    logging.info(f"DIAGNOSTIC: Proceeding to next page with token: {pagination_token}")
                 else:
+                    logging.info("DIAGNOSTIC: No 'next_token' found. Reached the end of bookmarks.")
                     break
 
             # --- Emailing and Cleanup Logic ---
