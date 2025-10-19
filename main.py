@@ -16,7 +16,7 @@ from flask import Flask
 from tenacity import retry, stop_after_attempt, wait_fixed
 
 from utils import (download_video, humanize_request, run_keep_alive_scheduler,
-                   setup_logging)
+                   send_email_with_attachment, setup_logging)
 
 # --- Setup and Configuration ---
 load_dotenv()
@@ -91,10 +91,12 @@ def process_bookmarks():
 
     while True:
         logging.info("Starting new bookmark check cycle.")
-        new_videos_downloaded = False
-        download_folder = f"bookmark_videos_{datetime.now().strftime('%Y-%m-%d')}"
-        os.makedirs(download_folder, exist_ok=True)
 
+        # Use a temporary directory for downloads
+        temp_download_dir = f"/tmp/downloads_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        os.makedirs(temp_download_dir, exist_ok=True)
+
+        new_video_files = []
         pagination_token = None
 
         try:
@@ -112,8 +114,8 @@ def process_bookmarks():
                 media_map = {m["media_key"]: m for m in response.includes.get("media", [])}
 
                 for tweet in response.data:
-                    if tweet.id in processed_tweet_ids:
-                        continue # Skip already processed tweets
+                    if str(tweet.id) in processed_tweet_ids:
+                        continue
 
                     if tweet.attachments and "media_keys" in tweet.attachments:
                         for media_key in tweet.attachments["media_keys"]:
@@ -121,9 +123,11 @@ def process_bookmarks():
                             if media and media.type == "video":
                                 tweet_url = f"https://twitter.com/i/status/{tweet.id}"
                                 logging.info(f"Video found in tweet: {tweet_url}")
-                                if download_video(tweet_url, download_folder):
-                                    new_videos_downloaded = True
-                                break # Move to the next tweet
+                                if download_video(tweet_url, temp_download_dir):
+                                    # Track successfully downloaded files
+                                    # Note: This is a simple approach; a more robust one would get the exact filename from yt-dlp.
+                                    pass
+                                break
 
                     processed_tweet_ids.add(str(tweet.id))
 
@@ -131,18 +135,43 @@ def process_bookmarks():
                 if "next_token" in meta:
                     pagination_token = meta["next_token"]
                 else:
-                    break # No more pages
+                    break
+
+            # --- Emailing and Cleanup Logic ---
+            downloaded_files = [os.path.join(temp_download_dir, f) for f in os.listdir(temp_download_dir)]
+            if not downloaded_files:
+                logging.info("Finished processing. No new videos found.")
+            else:
+                logging.info(f"Downloaded {len(downloaded_files)} new video(s).")
+                attachment_path = None
+                if len(downloaded_files) == 1:
+                    attachment_path = downloaded_files[0]
+                else:
+                    # Create a single zip file
+                    zip_filename = f"bookmark_videos_{datetime.now().strftime('%Y-%m-%d')}.zip"
+                    attachment_path = os.path.join(temp_download_dir, zip_filename)
+                    logging.info(f"Creating zip file: {attachment_path}")
+                    with zipfile.ZipFile(attachment_path, 'w') as zipf:
+                        for file in downloaded_files:
+                            zipf.write(file, os.path.basename(file))
+
+                # Send the email
+                if attachment_path:
+                    send_email_with_attachment(attachment_path)
 
         except Exception as e:
             logging.error(f"An error occurred during the bookmark check cycle: {e}")
 
         finally:
             save_processed_tweets()
-            if new_videos_downloaded:
-                # Optional: Zip and email logic could be triggered here
-                logging.info(f"Finished processing. New videos were downloaded to {download_folder}.")
-            else:
-                logging.info("Finished processing. No new videos found.")
+            # Clean up the temporary directory
+            try:
+                if os.path.exists(temp_download_dir):
+                    import shutil
+                    shutil.rmtree(temp_download_dir)
+                    logging.info(f"Successfully cleaned up temporary directory: {temp_download_dir}")
+            except Exception as e:
+                logging.error(f"Failed to clean up temporary directory {temp_download_dir}: {e}")
 
         # Wait for the next 15-minute interval + random jitter, with heartbeat logging
         total_wait_seconds = (15 * 60) + random.uniform(60, 120)

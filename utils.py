@@ -94,3 +94,44 @@ def setup_logging():
             logging.FileHandler("app.log")
         ]
     )
+
+# --- Emailing ---
+
+def send_email_with_attachment(attachment_path):
+    """
+    Sends an email with the downloaded video(s) as an attachment.
+    """
+    email_from = os.getenv("EMAIL_FROM")
+    email_to = os.getenv("EMAIL_TO")
+    smtp_pass = os.getenv("SMTP_PASS")
+
+    if not all([email_from, email_to, smtp_pass]):
+        logging.warning("Email credentials not fully configured. Skipping email.")
+        return
+
+    logging.info(f"Preparing to email attachment {os.path.basename(attachment_path)} to {email_to}...")
+
+    msg = MIMEMultipart()
+    msg["From"] = email_from
+    msg["To"] = email_to
+    msg["Subject"] = f"New Bookmarked Videos Downloaded - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+
+    body = "New videos have been downloaded from your X bookmarks. Please find them attached."
+    msg.attach(MIMEText(body, "plain"))
+
+    try:
+        with open(attachment_path, "rb") as attachment:
+            part = MIMEApplication(attachment.read(), Name=os.path.basename(attachment_path))
+        part['Content-Disposition'] = f'attachment; filename="{os.path.basename(attachment_path)}"'
+        msg.attach(part)
+
+        server = smtplib.SMTP("smtp.gmail.com", 587)
+        server.starttls()
+        server.login(email_from, smtp_pass)
+        server.send_message(msg)
+        server.quit()
+        logging.info(f"Email sent successfully to {email_to}.")
+    except FileNotFoundError:
+        logging.error(f"Attachment file not found: {attachment_path}. Cannot send email.")
+    except Exception as e:
+        logging.error(f"Failed to send email: {e}")
