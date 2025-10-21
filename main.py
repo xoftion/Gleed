@@ -100,63 +100,64 @@ def process_bookmarks():
         pagination_token = None
 
         try:
+            # This loop is designed to only run ONCE per cycle to respect the 15-min rate limit.
+            # It will fetch one page of bookmarks, process them, and then the outer `while True` loop will handle the waiting.
             while True:
                 response = get_bookmarks(client, pagination_token)
 
                 if response.errors:
-                    logging.error(f"X API errors: {response.errors}")
-                    break
+                    # Handle specific "Forbidden" error for permissions
+                    if any(error.get("title") == "Forbidden" for error in response.errors):
+                        logging.critical("CRITICAL ERROR: The application has been blocked by the X API (403 Forbidden).")
+                        logging.critical("This is a permissions issue. Please go to your X Developer Portal, ensure your app has 'Read' permissions for Bookmarks, regenerate your keys, and update them in Render.")
+                        logging.critical("The bot will stop now. Please redeploy after fixing permissions.")
+                        return # Stop the entire process
+                    else:
+                        logging.error(f"X API errors: {response.errors}")
+                        break # Exit the inner loop on other errors
 
                 if not response.data:
-                    logging.info("DIAGNOSTIC: API returned no bookmark data on this page.")
+                    logging.info("No new bookmarks found in this cycle.")
                     break
-
-                logging.info(f"DIAGNOSTIC: Received {len(response.data)} bookmarks on this page.")
-
-                media_map = {m["media_key"]: m for m in response.includes.get("media", [])}
-                logging.info(f"DIAGNOSTIC: Found {len(media_map)} media items in 'includes' block.")
-
-                for tweet in response.data:
-                    if str(tweet.id) in processed_tweet_ids:
-                        continue
-
-                    if tweet.attachments and "media_keys" in tweet.attachments:
-                        logging.info(f"DIAGNOSTIC: Tweet {tweet.id} has {len(tweet.attachments['media_keys'])} media keys.")
-                        for i, media_key in enumerate(tweet.attachments["media_keys"]):
-                            media = media_map.get(media_key)
-                            if media:
-                                logging.info(f"DIAGNOSTIC: Media key {i+1}/{len(tweet.attachments['media_keys'])} ({media_key}) has type: {media.type}")
-                                if media.type == "video":
-                                    tweet_url = f"https://twitter.com/i/status/{tweet.id}"
-                                    logging.info(f"Video found in tweet: {tweet_url}")
-                                    download_video(tweet_url, temp_download_dir)
-                                    break # Found a video, no need to check other media in this tweet
-                            else:
-                                logging.warning(f"DIAGNOSTIC: Media key {media_key} not found in 'includes' block.")
-                    else:
-                        logging.info(f"DIAGNOSTIC: Tweet {tweet.id} has no media attachments.")
-
-                    processed_tweet_ids.add(str(tweet.id))
-
-                meta = response.meta
-                if "next_token" in meta:
-                    pagination_token = meta["next_token"]
-                    logging.info(f"DIAGNOSTIC: Proceeding to next page with token: {pagination_token}")
                 else:
-                    logging.info("DIAGNOSTIC: No 'next_token' found. Reached the end of bookmarks.")
-                    break
+                    logging.info(f"DIAGNOSTIC: Received {len(response.data)} bookmarks on this page.")
+                    media_map = {m["media_key"]: m for m in response.includes.get("media", [])}
+                    logging.info(f"DIAGNOSTIC: Found {len(media_map)} media items in 'includes' block.")
+
+                    for tweet in response.data:
+                        if str(tweet.id) in processed_tweet_ids:
+                            continue
+
+                        if tweet.attachments and "media_keys" in tweet.attachments:
+                            logging.info(f"DIAGNOSTIC: Tweet {tweet.id} has {len(tweet.attachments['media_keys'])} media keys.")
+                            for i, media_key in enumerate(tweet.attachments["media_keys"]):
+                                media = media_map.get(media_key)
+                                if media:
+                                    logging.info(f"DIAGNOSTIC: Media key {i+1}/{len(tweet.attachments['media_keys'])} ({media_key}) has type: {media.type}")
+                                    if media.type == "video":
+                                        tweet_url = f"https://twitter.com/i/status/{tweet.id}"
+                                        logging.info(f"Video found in tweet: {tweet_url}")
+                                        download_video(tweet_url, temp_download_dir)
+                                        break
+                                else:
+                                    logging.warning(f"DIAGNOSTIC: Media key {media_key} not found in 'includes' block.")
+                        else:
+                            logging.info(f"DIAGNOSTIC: Tweet {tweet.id} has no media attachments.")
+
+                        processed_tweet_ids.add(str(tweet.id))
+
+                # We break after the first page to ensure we only make one API call per 15-minute cycle.
+                logging.info("Processed one page of bookmarks. Will wait for the next cycle.")
+                break
 
             # --- Emailing and Cleanup Logic ---
             downloaded_files = [os.path.join(temp_download_dir, f) for f in os.listdir(temp_download_dir)]
-            if not downloaded_files:
-                logging.info("Finished processing. No new videos found.")
-            else:
+            if downloaded_files:
                 logging.info(f"Downloaded {len(downloaded_files)} new video(s).")
                 attachment_path = None
                 if len(downloaded_files) == 1:
                     attachment_path = downloaded_files[0]
                 else:
-                    # Create a single zip file
                     zip_filename = f"bookmark_videos_{datetime.now().strftime('%Y-%m-%d')}.zip"
                     attachment_path = os.path.join(temp_download_dir, zip_filename)
                     logging.info(f"Creating zip file: {attachment_path}")
@@ -164,16 +165,21 @@ def process_bookmarks():
                         for file in downloaded_files:
                             zipf.write(file, os.path.basename(file))
 
-                # Send the email
                 if attachment_path:
                     send_email_with_attachment(attachment_path)
 
+        except tweepy.errors.Forbidden as e:
+            logging.critical("CRITICAL ERROR: The application has been blocked by the X API (403 Forbidden).")
+            logging.critical("This is a permissions issue. Please go to your X Developer Portal, ensure your app has 'Read' permissions for Bookmarks, regenerate your keys, and update them in Render.")
+            logging.critical("The bot will stop now. Please redeploy after fixing permissions.")
+            logging.error(f"Full error details: {e}")
+            return # Stop the entire process
+
         except Exception as e:
-            logging.error(f"An error occurred during the bookmark check cycle: {e}")
+            logging.error(f"An unexpected error occurred during the bookmark check cycle: {e}")
 
         finally:
             save_processed_tweets()
-            # Clean up the temporary directory
             try:
                 if os.path.exists(temp_download_dir):
                     import shutil
